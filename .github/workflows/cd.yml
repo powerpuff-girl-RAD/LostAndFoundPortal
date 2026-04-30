@@ -1,5 +1,4 @@
 name: CD — Deploy to GitHub Pages (Blue-Green)
-
 on:
   workflow_run:
     workflows: ["CI"]
