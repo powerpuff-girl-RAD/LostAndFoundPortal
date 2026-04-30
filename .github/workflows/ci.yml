@@ -48,7 +48,7 @@ jobs:
         run: npm run build
         env:
           # Vite reads BASE_URL for sub-path deployments (GitHub Pages)
-          BASE_URL: /UniLostAndFoundPortal/
+          BASE_URL: /LostAndFoundPortal/
 
       - name: Bundle size audit
         run: |
