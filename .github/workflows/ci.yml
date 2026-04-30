@@ -1,0 +1,288 @@
+name: CI
+
+on:
+  push:
+    branches: ["main", "feature/**", "fix/**"]
+  pull_request:
+    branches: ["main"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+
+# All run steps default to the app subfolder
+defaults:
+  run:
+    working-directory: LostFoundPortal
+
+jobs:
+  # ─────────────────────────────────────────────
+  # STAGE 1 — Build
+  # ─────────────────────────────────────────────
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.x
+          cache: "npm"
+          cache-dependency-path: LostFoundPortal/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint (ESLint)
+        # Use the project-local ESLint to respect the version in package.json
+        # and avoid npx pulling a mismatched version (e.g. v10 vs .eslintrc.* config)
+        # run: ./node_modules/.bin/eslint src --ext .ts,.tsx,.js,.jsx --max-warnings=0
+        run: npx eslint src --ext .ts,.tsx,.js,.jsx --max-warnings=0
+
+      - name: Build application (Vite)
+        run: npm run build
+        env:
+          # Vite reads BASE_URL for sub-path deployments (GitHub Pages)
+          BASE_URL: /UniLostAndFoundPortal/
+
+      - name: Bundle size audit
+        run: |
+          echo "=== dist/ output sizes ==="
+          find dist/assets -name "*.js" | xargs wc -c 2>/dev/null | sort -rn | head -5 || du -sh dist/
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-${{ github.sha }}
+          path: LostFoundPortal/dist/
+          retention-days: 7
+
+  # ─────────────────────────────────────────────
+  # STAGE 2 — Unit & Integration Tests
+  # ─────────────────────────────────────────────
+  test:
+    name: Test (Node ${{ matrix.node-version }})
+    runs-on: ubuntu-latest
+    needs: build
+
+    strategy:
+      matrix:
+        node-version: [20.x]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: "npm"
+          cache-dependency-path: LostFoundPortal/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests with coverage
+        run: npm run test:coverage
+        env:
+          CI: true
+        # Enforce thresholds by adding to package.json:
+        # "jest": {
+        #   "coverageThreshold": {
+        #     "global": { "lines": 80, "branches": 75, "functions": 80, "statements": 80 }
+        #   }
+        # }
+
+      - name: Upload coverage report
+        if: matrix.node-version == '20.x'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: LostFoundPortal/coverage/
+          retention-days: 7
+
+      # Uncomment after adding CODECOV_TOKEN secret:
+      # - name: Upload to Codecov
+      #   uses: codecov/codecov-action@v4
+      #   with:
+      #     token: ${{ secrets.CODECOV_TOKEN }}
+      #     files: ./LostFoundPortal/coverage/lcov.info
+
+  # ─────────────────────────────────────────────
+  # STAGE 3a — Security Scan (parallel with E2E)
+  # ─────────────────────────────────────────────
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: "fs"
+          scan-ref: "LostFoundPortal"
+          format: "sarif"
+          output: "trivy-results.sarif"
+          severity: "CRITICAL,HIGH"
+
+      - name: Upload Trivy results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: "trivy-results.sarif"
+
+      - name: npm audit
+        run: npm audit --audit-level=high
+        continue-on-error: true
+
+  # ─────────────────────────────────────────────
+  # STAGE 3b — Staging / E2E (parallel with security)
+  # ─────────────────────────────────────────────
+  staging-e2e:
+    name: Staging E2E
+    runs-on: ubuntu-latest
+    needs: [test, security-scan]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.x
+          cache: "npm"
+          cache-dependency-path: LostFoundPortal/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Download build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: build-${{ github.sha }}
+          path: LostFoundPortal/dist/
+
+      - name: Run E2E tests (Cypress)
+        uses: cypress-io/github-action@v6
+        with:
+          working-directory: LostFoundPortal
+          # Serve the Vite dist/ build locally on port 3000
+          start: npx serve -s dist -l 3000
+          wait-on: "http://localhost:3000"
+          wait-on-timeout: 30
+          browser: chrome
+          # Critical localStorage flows:
+          # - Report item → verify written to localStorage
+          # - Reload page → verify data persists
+          # - Delete item → verify removed from localStorage
+          spec: "cypress/e2e/**/*.cy.{js,jsx,ts,tsx}"
+        env:
+          CYPRESS_BASE_URL: http://localhost:3000
+
+      - name: Upload Cypress screenshots on failure
+        uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: cypress-screenshots
+          path: LostFoundPortal/cypress/screenshots/
+          retention-days: 3
+
+      # - name: Lighthouse CI audit
+      #   uses: treosh/lighthouse-ci-action@v11
+      #   with:
+      #     urls: |
+      #       http://localhost:3000
+      #     budgetPath: "LostFoundPortal/.lighthouserc.json"
+      #     uploadArtifacts: true
+      #     temporaryPublicStorage: true
+      #   continue-on-error: true
+
+  lighthouse:
+    name: Lighthouse Audit
+    runs-on: ubuntu-latest
+    needs: [test, security-scan]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.x
+          cache: "npm"
+          cache-dependency-path: LostFoundPortal/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Download build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: build-${{ github.sha }}
+          path: LostFoundPortal/dist/
+
+      - name: Start server and wait for it
+        run: |
+          npx serve -s dist -l 3000 &
+          echo "SERVER_PID=$!" >> $GITHUB_ENV
+          npx wait-on http://localhost:3000 --timeout 30000
+
+      - name: Run Lighthouse CI
+        uses: treosh/lighthouse-ci-action@v11
+        with:
+          urls: |
+            http://localhost:3000
+          budgetPath: "LostFoundPortal/.lighthouserc.json"
+          uploadArtifacts: true
+          temporaryPublicStorage: true
+        continue-on-error: true
+
+      - name: Stop server
+        if: always()
+        run: kill $SERVER_PID 2>/dev/null || true
+
+  # ─────────────────────────────────────────────
+  # STAGE 4 — Package release artifact for CD
+  # ─────────────────────────────────────────────
+  package:
+    name: Package Artifact
+    runs-on: ubuntu-latest
+    needs: [staging-e2e, lighthouse]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+
+    steps:
+      - name: Download build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: build-${{ github.sha }}
+          path: dist/
+
+      - name: Re-upload as SHA-tagged release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ github.sha }}
+          path: dist/
+          retention-days: 30
+
+      - name: CI summary
+        working-directory: ${{ github.workspace }}
+        run: |
+          echo "## CI Pipeline Complete ✅" >> $GITHUB_STEP_SUMMARY
+          echo "| | |" >> $GITHUB_STEP_SUMMARY
+          echo "|---|---|" >> $GITHUB_STEP_SUMMARY
+          echo "| Commit | \`${{ github.sha }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Artifact | \`release-${{ github.sha }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Framework | Vite + React + TypeScript |" >> $GITHUB_STEP_SUMMARY
+          echo "| Output dir | \`dist/\` |" >> $GITHUB_STEP_SUMMARY

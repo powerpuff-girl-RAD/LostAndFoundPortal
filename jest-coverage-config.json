@@ -1,0 +1,17 @@
+// Add this "jest" block to your package.json
+// (merge with any existing jest config you have)
+{
+  "jest": {
+    "coverageThreshold": {
+      "global": {
+        "lines": 80,
+        "branches": 75,
+        "functions": 80,
+        "statements": 80
+      }
+    },
+    "moduleNameMapper": {
+      "localStorage": "<rootDir>/src/__mocks__/localStorageMock.js"
+    }
+  }
+}
