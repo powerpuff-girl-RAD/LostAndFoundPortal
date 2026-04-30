@@ -83,7 +83,7 @@ jobs:
       - name: Build application (Vite — Blue)
         run: npm run build
         env:
-          BASE_URL: /UniLostAndFoundPortal/
+          BASE_URL: /LostAndFoundPortal/
           VITE_DEPLOY_SHA: ${{ needs.gate.outputs.sha }}
           VITE_DEPLOY_RUN: ${{ github.run_id }}
 
