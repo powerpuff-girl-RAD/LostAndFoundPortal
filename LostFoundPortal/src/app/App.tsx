@@ -19,7 +19,7 @@ function NotFound() {
 
 export default function App() {
   return (
-    <BrowserRouter basename="/UniLostAndFoundPortal">
+    <BrowserRouter basename="/LostAndFoundPortal">
       <Layout>
         <Routes>
           <Route path="/" element={<Home />} />

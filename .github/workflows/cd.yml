@@ -223,7 +223,7 @@ jobs:
           echo "Waiting 60s for CDN propagation..."
           sleep 60
 
-          PROD_URL="https://${{ github.repository_owner }}.github.io/UniLostAndFoundPortal"
+          PROD_URL="https://${{ github.repository_owner }}.github.io/LostAndFoundPortal"
           echo "Health-checking: $PROD_URL"
 
           HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$PROD_URL" || echo "000")
